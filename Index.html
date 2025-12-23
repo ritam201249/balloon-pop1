@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Balloon Pop — Mobile Game</title>
+<style>
+  html,body { height:100%; margin:0; background:#87CEEB; font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; -webkit-tap-highlight-color: transparent; }
+  #game { display:block; width:100%; height:100vh; touch-action: none; }
+  .ui {
+    position: absolute; left:0; right:0; top:8px; display:flex; justify-content:space-between; align-items:center; padding:0 12px; pointer-events:none;
+    color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.4); font-weight:600;
+  }
+  .panel { background:rgba(0,0,0,0.15); padding:6px 10px; border-radius:12px; pointer-events:auto; }
+  #overlay {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:linear-gradient(rgba(0,0,0,0.35),rgba(0,0,0,0.35));
+    color:#fff; font-size:18px; text-align:center; padding:20px; gap:10px; flex-direction:column;
+  }
+  button { background:#fff; color:#0077cc; border:none; padding:10px 16px; border-radius:10px; font-weight:700; cursor:pointer; }
+  small { display:block; font-size:12px; opacity:0.9; margin-top:4px; }
+  .life { width:12px; height:12px; border-radius:50%; background:#ff6b6b; display:inline-block; margin-left:6px; box-shadow:0 1px 0 rgba(0,0,0,0.2);}
+  #footerNote { position:absolute; bottom:10px; left:12px; right:12px; color:#fff; text-align:center; font-size:13px; opacity:0.95; pointer-events:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div class="ui">
+  <div class="panel" id="scorePanel">Score: <span id="score">0</span></div>
+  <div class="panel" id="livesPanel">Lives: <span id="livesUI"></span></div>
+</div>
+
+<div id="overlay">
+  <h1 style="margin:0; font-size:28px;">Balloon Pop</h1>
+  <div>Tap balloons to pop them. Don't let them escape!</div>
+  <div style="display:flex; gap:10px;">
+    <button id="startBtn">Start Game</button>
+    <button id="howBtn">How to Play</button>
+  </div>
+  <small>Made for mobile — tap anywhere on a balloon to pop it.</small>
+</div>
+
+<div id="footerNote">Tip: rotate your phone to portrait for the best experience.</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  let DPR = Math.max(1, window.devicePixelRatio || 1);
+
+  function resize() {
+    DPR = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.floor(canvas.clientWidth * DPR);
+    canvas.height = Math.floor(canvas.clientHeight * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  // Make canvas fill viewport
+  function fitCanvas() {
+    canvas.style.width = '100%';
+    canvas.style.height = '100vh';
+    resize();
+  }
+  fitCanvas();
+  window.addEventListener('resize', resize);
+
+  // Game state
+  let balloons = [];
+  let lastSpawn = 0;
+  let spawnInterval = 700; // ms
+  let lastFrame = 0;
+  let running = false;
+  let score = 0;
+  let lives = 3;
+  const maxLives = 3;
+  const overlay = document.getElementById('overlay');
+  const scoreEl = document.getElementById('score');
+  const livesUI = document.getElementById('livesUI');
+  const startBtn = document.getElementById('startBtn');
+  const howBtn = document.getElementById('howBtn');
+
+  function setLivesUI() {
+    livesUI.innerHTML = '';
+    for (let i=0;i<lives;i++){
+      const span = document.createElement('span');
+      span.className = 'life';
+      livesUI.appendChild(span);
+    }
+  }
+  setLivesUI();
+
+  function rnd(min,max){ return Math.random()*(max-min)+min; }
+
+  // Balloon creation
+  function spawnBalloon() {
+    const w = canvas.clientWidth;
+    const r = Math.max(18, Math.round(rnd(18, 48)));
+    const x = rnd(r, w - r);
+    const speed = rnd(30, 90) / 100 * (1 + score/50); // faster as score increases
+    const hue = Math.floor(rnd(0, 360));
+    balloons.push({
+      x, y: canvas.clientHeight + r + rnd(6,40),
+      r, speed,
+      hue,
+      popped: false,
+      wobble: rnd(0, Math.PI*2),
+      wobbleSpeed: rnd(0.8, 2.0),
+    });
+  }
+
+  // Sound: simple pop using WebAudio
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audioCtx = null;
+  function playPop() {
+    try {
+      if (!audioCtx) audioCtx = new AudioCtx();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'square';
+      o.frequency.setValueAtTime(800 + Math.random()*400, audioCtx.currentTime);
+      g.gain.setValueAtTime(0.12, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + 0.16);
+    } catch (e) {
+      // ignore if audio blocked
+    }
+  }
+
+  function popBalloon(i) {
+    const b = balloons[i];
+    if (!b || b.popped) return;
+    b.popped = true;
+    score += 1;
+    playPop();
+  }
+
+  function endGame() {
+    running = false;
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+      <h1 style="margin:0; font-size:28px;">Game Over</h1>
+      <div style="font-size:16px">Your score: <strong>${score}</strong></div>
+      <div style="display:flex;gap:10px;margin-top:10px;">
+        <button id="restartBtn">Play Again</button>
+        <button id="menuBtn">Main Menu</button>
+      </div>
+      <small style="margin-top:8px">Refresh to reset if buttons don't respond.</small>
+    `;
+    document.getElementById('restartBtn').addEventListener('click', startGame);
+    document.getElementById('menuBtn').addEventListener('click', showMenu);
+  }
+
+  function showMenu(){
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+      <h1 style="margin:0; font-size:28px;">Balloon Pop</h1>
+      <div>Tap balloons to pop them. Don't let them escape!</div>
+      <div style="display:flex; gap:10px; margin-top:8px;">
+        <button id="startBtn2">Start Game</button>
+        <button id="howBtn2">How to Play</button>
+      </div>
+      <small>Made for mobile — tap anywhere on a balloon to pop it.</small>
+    `;
+    document.getElementById('startBtn2').addEventListener('click', startGame);
+    document.getElementById('howBtn2').addEventListener('click', showHow);
+  }
+
+  function showHow(){
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+      <h1 style="margin:0; font-size:22px;">How to play</h1>
+      <div style="max-width:360px">Tap the colorful balloons before they reach the top. Each miss costs a life. Pop as many as you can!</div>
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <button id="backBtn">Back</button>
+      </div>
+    `;
+    document.getElementById('backBtn').addEventListener('click', showMenu);
+  }
+
+  function startGame(){
+    score = 0;
+    lives = maxLives;
+    balloons = [];
+    lastSpawn = performance.now();
+    lastFrame = performance.now();
+    running = true;
+    setLivesUI();
+    scoreEl.textContent = score;
+    overlay.style.display = 'none';
+    // first few balloons ready
+    for (let i=0;i<2;i++) spawnBalloon();
+    requestAnimationFrame(loop);
+  }
+
+  // Input handling (touch + mouse)
+  function getEventPos(e){
+    let x,y;
+    if (e.changedTouches && e.changedTouches.length) {
+      const t = e.changedTouches[0];
+      x = t.clientX;
+      y = t.clientY;
+    } else {
+      x = e.clientX;
+      y = e.clientY;
+    }
+    return { x, y };
+  }
+
+  function handleTap(e){
+    e.preventDefault();
+    const pos = getEventPos(e);
+    const rect = canvas.getBoundingClientRect();
+    const cx = pos.x - rect.left;
+    const cy = pos.y - rect.top;
+    // iterate top-to-bottom (reverse) so top balloons get popped first
+    for (let i = balloons.length - 1; i >= 0; i--) {
+      const b = balloons[i];
+      if (b.popped) continue;
+      const dx = cx - b.x;
+      const dy = cy - b.y;
+      if (dx*dx + dy*dy <= b.r*b.r) {
+        popBalloon(i);
+        scoreEl.textContent = score;
+        return;
+      }
+    }
+  }
+
+  canvas.addEventListener('touchstart', handleTap, { passive:false });
+  canvas.addEventListener('mousedown', handleTap);
+
+  // Main loop
+  function loop(ts){
+    if (!running) return;
+    const dt = (ts - lastFrame) / 1000;
+    lastFrame = ts;
+
+    // spawn
+    if (ts - lastSpawn > spawnInterval) {
+      spawnBalloon();
+      lastSpawn = ts;
+      // slightly faster spawns as score goes up
+      spawnInterval = Math.max(300, 700 - Math.floor(score/6)*20);
+    }
+
+    // update balloons
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    for (let i = balloons.length -1; i >= 0; i--) {
+      const b = balloons[i];
+      if (b.popped) {
+        // pop animation: expand & fade out
+        b.r += 120 * dt;
+        b.alpha = (b.alpha === undefined) ? 1 : b.alpha - 3.0 * dt;
+        if (b.alpha <= 0) balloons.splice(i,1);
+        continue;
+      }
+      // wobble sideways and move upward
+      b.wobble += b.wobbleSpeed * dt;
+      b.x += Math.sin(b.wobble) * 18 * dt;
+      b.y -= b.speed * dt * 60; // speed normalized
+      // if it goes off the top, player loses a life
+      if (b.y + b.r < -10) {
+        balloons.splice(i,1);
+        lives -= 1;
+        setLivesUI();
+        if (lives <= 0) {
+          endGame();
+          return;
+        }
+      }
+      // keep x inside bounds
+      if (b.x - b.r < 0) b.x = b.r;
+      if (b.x + b.r > width) b.x = width - b.r;
+    }
+
+    // draw background
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // sky gradient
+    const g = ctx.createLinearGradient(0,0,0,height);
+    g.addColorStop(0, '#87CEEB');
+    g.addColorStop(1, '#cfefff');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,width,height);
+
+    // draw balloons
+    for (let i=0;i<balloons.length;i++){
+      const b = balloons[i];
+      ctx.save();
+      ctx.beginPath();
+      // balloon body
+      const alpha = b.alpha !== undefined ? b.alpha : 1;
+      ctx.globalAlpha = alpha;
+      // main circle with radial gradient
+      const grad = ctx.createRadialGradient(b.x - b.r*0.3, b.y - b.r*0.4, b.r*0.15, b.x, b.y, b.r);
+      grad.addColorStop(0, `hsl(${b.hue} 90% 70%)`);
+      grad.addColorStop(1, `hsl(${b.hue} 85% 45%)`);
+      ctx.fillStyle = grad;
+      ctx.ellipse(b.x, b.y, b.r, b.r*1.08, 0, 0, Math.PI*2);
+      ctx.fill();
+      // shine
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.ellipse(b.x - b.r*0.32, b.y - b.r*0.4, b.r*0.28, b.r*0.48, 0, 0, Math.PI*2);
+      ctx.fill();
+      // string
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(100,100,100,${0.25*alpha})`;
+      ctx.lineWidth = 1.8;
+      ctx.moveTo(b.x, b.y + b.r*1.02);
+      ctx.quadraticCurveTo(b.x + 6, b.y + b.r*1.3, b.x - 2, b.y + b.r*1.7);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  // initial menu handlers
+  startBtn.addEventListener('click', startGame);
+  howBtn.addEventListener('click', showHow);
+
+  // show menu initially
+  overlay.style.display = 'flex';
+
+  // friendly guidance if audio is blocked (mobile browsers often require user gesture)
+  document.addEventListener('click', ()=>{ if (!audioCtx && AudioCtx) { try { audioCtx = new AudioCtx(); audioCtx.suspend(); } catch(e){} } }, { once:true });
+
+})();
+</script>
+</body>
+</html>
